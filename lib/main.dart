@@ -1,10 +1,8 @@
-import 'dart:convert';
-// import 'dart:html';
-
 import 'package:flutter/material.dart';
+
+import 'package:flutter_test_webrtc/webrtcUtils.dart';
 import 'package:flutter_test_webrtc/socketUtils.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:sdp_transform/sdp_transform.dart';
 
 void main() {
   runApp(MyApp());
@@ -34,24 +32,17 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  bool _offer = false;
+  WebRTCUtils _webRTCUtils = new WebRTCUtils();
   bool _canAnswer = false;
 
-  bool _ismuted = false;
+  bool _micEnabled = true;
   bool _isCameraOn = true;
 
   String roomId;
 
-  RTCPeerConnection _peerConnection;
-  MediaStream _localStream;
-
-  final _localRenderer = new RTCVideoRenderer();
-  final _remoteRenderer = new RTCVideoRenderer();
-
   @override
   void dispose() {
-    _localRenderer.dispose();
-    _remoteRenderer.dispose();
+    // _webRTCUtils.dispose();
     super.dispose();
   }
 
@@ -72,26 +63,17 @@ class _MyHomePageState extends State<MyHomePage> {
   _mute() {
     if (this.mounted) {
       setState(() {
-        _ismuted = !_ismuted;
-
-        if (_localStream != null) {
-          Helper.setMicrophoneMute(
-              _ismuted, _localStream.getAudioTracks()[0]);
-        }
+        _micEnabled = !_micEnabled;
+        _webRTCUtils.mute(_micEnabled);
       });
     }
-  }
 
-  _changeCamera() async {
-    if (_localStream != null) {
-      await Helper.switchCamera(_localStream.getVideoTracks()[0]);
-    }
   }
 
   _shutCamera() {
     setState(() {
       _isCameraOn = !_isCameraOn;
-      _localStream.getVideoTracks()[0].enabled = _isCameraOn;
+      _webRTCUtils.shutCamera(_isCameraOn);
     });
   }
 
@@ -99,126 +81,12 @@ class _MyHomePageState extends State<MyHomePage> {
   void initState() {
     SocketUtils.init();
     SocketUtils.callReceivedListener(_callReceived);
-    SocketUtils.callAnsweredListener(_createOffer);
-    SocketUtils.sdpListener(_setRemoteDescription);
-    SocketUtils.iceCandidatesListener(_setCandidate);
+    SocketUtils.callAnsweredListener(_webRTCUtils.createOffer);
+    SocketUtils.sdpListener(_webRTCUtils.setRemoteDescription);
+    SocketUtils.iceCandidatesListener(_webRTCUtils.setCandidate);
 
-    initRenderers();
-    _createPeerConnection().then((pc) {
-      _peerConnection = pc;
-    });
+    _webRTCUtils.init();
     super.initState();
-  }
-
-  initRenderers() async {
-    await _localRenderer.initialize();
-    await _remoteRenderer.initialize();
-  }
-
-  _getUserMedia() async {
-    final Map<String, dynamic> mediaConstraints = {
-      'audio': true,
-      'video': {
-        "facingMode": 'user'
-      }
-    };
-
-    MediaStream stream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    _localRenderer.srcObject = stream;
-    // _localRenderer.mirror = true;
-
-    return stream;
-  }
-
-  _createPeerConnection() async {
-    Map<String, dynamic> configuration = {
-      "iceServers": [
-        { 'url': "stun:stun.l.google.com:19302" }
-      ]
-    };
-
-    final Map<String, dynamic> offerSdpConstraints = {
-      "mandatory": {
-        "OfferToReceiveAudio": true,
-        "OfferToReceiveVideo": true,
-      },
-      "optional": []
-    };
-
-    _localStream = await _getUserMedia();
-
-    RTCPeerConnection pc = await createPeerConnection(configuration, offerSdpConstraints);
-    pc.addStream(_localStream);
-
-    pc.onIceCandidate = (e) {
-      if (e.candidate != null) {
-        String ice = json.encode({
-          'candidate': e.candidate.toString(),
-          'sdpMid': e.sdpMid.toString(),
-          'sdpMlineIndex': e.sdpMlineIndex,
-        });
-
-        SocketUtils.sendCandidate(ice);
-      }
-    };
-
-    pc.onIceConnectionState = (e) {
-      print("ahmed: " + e.toString());
-    };
-
-    pc.onAddStream = (stream) {
-      print('addStream: ' + stream.id);
-      _remoteRenderer.srcObject = stream;
-    };
-
-    pc.onSignalingState = (state) {
-      print("ahmed State: " + state.toString());
-
-      if (state == RTCSignalingState.RTCSignalingStateHaveRemoteOffer)
-        _createAnswer();
-    };
-
-    return pc;
-  }
-
-  void _createOffer(String uid) async {
-    RTCSessionDescription description = await _peerConnection.createOffer({
-      'offerToReceiveVideo': 1
-    });
-
-    _offer = true;
-    _peerConnection.setLocalDescription(description);
-
-    var session = parse(description.sdp);
-    SocketUtils.sendSDP(json.encode(session));
-  }
-
-  void _createAnswer() async {
-    RTCSessionDescription description = await _peerConnection.createAnswer({
-      'offerToReceiveVideo': 1
-    });
-
-    _peerConnection.setLocalDescription(description);
-
-    var session = parse(description.sdp);
-    SocketUtils.sendSDP(json.encode(session));
-  }
-
-  void _setRemoteDescription(String jsonString) async {
-    dynamic session = await jsonDecode('$jsonString');
-
-    String sdp = write(session, null);
-    RTCSessionDescription description = new RTCSessionDescription(sdp, _offer? 'answer' : 'offer');
-
-    print(description.toMap());
-    await _peerConnection.setRemoteDescription(description);
-  }
-
-  void _setCandidate(String jsonString) async {
-    dynamic session = await jsonDecode("$jsonString");
-    dynamic candidate = new RTCIceCandidate(session['candidate'], session['sdpMid'], session['sdpMlineIndex']);
-
-    await _peerConnection.addCandidate(candidate);
   }
 
   SizedBox videoRenderers() => SizedBox(
@@ -230,7 +98,7 @@ class _MyHomePageState extends State<MyHomePage> {
               key: Key("local"),
               margin: EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 5.0),
               decoration: BoxDecoration(color: Colors.black),
-              child: RTCVideoView(_localRenderer),
+              child: new RTCVideoView(_webRTCUtils.getLocalRenderer()),
             )
         ),
         Flexible(
@@ -238,7 +106,7 @@ class _MyHomePageState extends State<MyHomePage> {
               key: Key("remote"),
               margin: EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 5.0),
               decoration: BoxDecoration(color: Colors.black),
-              child: new RTCVideoView(_remoteRenderer),
+              child: new RTCVideoView(_webRTCUtils.getRemoteRenderer()),
             )
         )
       ],
@@ -266,11 +134,11 @@ class _MyHomePageState extends State<MyHomePage> {
     children: <Widget>[
       RaisedButton(
         onPressed: _mute,
-        child: Text(_ismuted ? 'unmute' : "mute"),
+        child: Text(_micEnabled ? 'mute' : "unmute"),
         color: Colors.amber,
       ),
       RaisedButton(
-        onPressed: _changeCamera,
+        onPressed: _webRTCUtils.changeCamera,
         child: Text('Change Camera'),
         color: Colors.amber,
       ),

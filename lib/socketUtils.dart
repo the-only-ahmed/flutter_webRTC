@@ -2,7 +2,7 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:socket_io_client/socket_io_client.dart';
 
 class SocketUtils {
-  static const String SOCKET_URL = '************************************';
+  static const String SOCKET_URL = '*********************************';
   static IO.Socket _socket;
 
   static init() {
